@@ -174,4 +174,17 @@ impl PacketBuffer {
 
         Ok(())
     }
+
+    pub fn set(&mut self, pos: usize, val: u8) -> crate::Result<()> {
+        self.buffer[pos] = val;
+
+        Ok(())
+    }
+
+    pub fn set_u16(&mut self, position: usize, val: u16) -> crate::Result<()> {
+        self.set(position, (val >> 8) as u8)?;
+        self.set(position + 1, (val & 0xFF) as u8)?;
+
+        Ok(())
+    }
 }

@@ -1,4 +1,4 @@
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, Ipv6Addr};
 
 use crate::buffer::PacketBuffer;
 
@@ -128,7 +128,11 @@ impl DnsHeader {
 #[derive(PartialEq, Eq, Debug, Clone, Hash, Copy)]
 pub enum QueryType {
     UNKNOWN(u16),
-    A, // 1
+    A,
+    NS,
+    CNAME,
+    MX,
+    AAAA,
 }
 
 impl QueryType {
@@ -136,12 +140,20 @@ impl QueryType {
         match *self {
             QueryType::UNKNOWN(x) => x,
             QueryType::A => 1,
+            QueryType::NS => 2,
+            QueryType::CNAME => 5,
+            QueryType::MX => 15,
+            QueryType::AAAA => 28,
         }
     }
 
     pub fn from_number(num: u16) -> QueryType {
         match num {
             1 => QueryType::A,
+            2 => QueryType::NS,
+            5 => QueryType::CNAME,
+            15 => QueryType::MX,
+            28 => QueryType::AAAA,
             _ => QueryType::UNKNOWN(num),
         }
     }
@@ -191,6 +203,27 @@ pub enum DnsRecord {
         address: Ipv4Addr,
         ttl: u32,
     },
+    NS {
+        domain: String,
+        host: String,
+        ttl: u32,
+    },
+    CNAME {
+        domain: String,
+        host: String,
+        ttl: u32,
+    },
+    MX {
+        domain: String,
+        priority: u16,
+        host: String,
+        ttl: u32,
+    },
+    AAAA {
+        domain: String,
+        address: Ipv6Addr,
+        ttl: u32,
+    },
 }
 
 impl DnsRecord {
@@ -217,6 +250,60 @@ impl DnsRecord {
                 Ok(DnsRecord::A {
                     domain,
                     address,
+                    ttl,
+                })
+            }
+            QueryType::AAAA => {
+                let raw_address1 = buffer.read_u32()?;
+                let raw_address2 = buffer.read_u32()?;
+                let raw_address3 = buffer.read_u32()?;
+                let raw_address4 = buffer.read_u32()?;
+                let address = Ipv6Addr::new(
+                    ((raw_address1 >> 16) & 0xFFFF) as u16,
+                    ((raw_address1 >> 0) & 0xFFFF) as u16,
+                    ((raw_address2 >> 16) & 0xFFFF) as u16,
+                    ((raw_address2 >> 0) & 0xFFFF) as u16,
+                    ((raw_address3 >> 16) & 0xFFFF) as u16,
+                    ((raw_address3 >> 0) & 0xFFFF) as u16,
+                    ((raw_address4 >> 16) & 0xFFFF) as u16,
+                    ((raw_address4 >> 0) & 0xFFFF) as u16,
+                );
+
+                Ok(DnsRecord::AAAA {
+                    domain,
+                    address,
+                    ttl,
+                })
+            }
+            QueryType::NS => {
+                let mut ns = String::new();
+                buffer.read_qname(&mut ns)?;
+
+                Ok(DnsRecord::NS {
+                    domain,
+                    host: ns,
+                    ttl,
+                })
+            }
+            QueryType::CNAME => {
+                let mut cname = String::new();
+                buffer.read_qname(&mut cname)?;
+
+                Ok(DnsRecord::CNAME {
+                    domain,
+                    host: cname,
+                    ttl,
+                })
+            }
+            QueryType::MX => {
+                let priority = buffer.read_u16()?;
+                let mut mx = String::new();
+                buffer.read_qname(&mut mx)?;
+
+                Ok(DnsRecord::MX {
+                    domain,
+                    priority,
+                    host: mx,
                     ttl,
                 })
             }
@@ -253,6 +340,77 @@ impl DnsRecord {
                 buffer.write_u8(octets[1])?;
                 buffer.write_u8(octets[2])?;
                 buffer.write_u8(octets[3])?;
+            }
+            DnsRecord::NS {
+                ref domain,
+                ref host,
+                ttl,
+            } => {
+                buffer.write_qname(domain)?;
+                buffer.write_u16(QueryType::NS.to_number())?;
+                buffer.write_u16(1)?;
+                buffer.write_u32(ttl)?;
+
+                let position = buffer.position();
+                buffer.write_u16(0)?;
+
+                buffer.write_qname(host)?;
+
+                let size = buffer.position() - (position + 2);
+                buffer.set_u16(position, size as u16)?;
+            }
+            DnsRecord::CNAME {
+                ref domain,
+                ref host,
+                ttl,
+            } => {
+                buffer.write_qname(domain)?;
+                buffer.write_u16(QueryType::CNAME.to_number())?;
+                buffer.write_u16(1)?;
+                buffer.write_u32(ttl)?;
+
+                let position = buffer.position();
+                buffer.write_u16(0)?;
+
+                buffer.write_qname(host)?;
+
+                let size = buffer.position() - (position + 2);
+                buffer.set_u16(position, size as u16)?;
+            }
+            DnsRecord::MX {
+                ref domain,
+                priority,
+                ref host,
+                ttl,
+            } => {
+                buffer.write_qname(domain)?;
+                buffer.write_u16(QueryType::MX.to_number())?;
+                buffer.write_u16(1)?;
+                buffer.write_u32(ttl)?;
+
+                let position = buffer.position();
+                buffer.write_u16(0)?;
+
+                buffer.write_u16(priority)?;
+                buffer.write_qname(host)?;
+
+                let size = buffer.position() - (position + 2);
+                buffer.set_u16(position, size as u16)?;
+            }
+            DnsRecord::AAAA {
+                ref domain,
+                ref address,
+                ttl,
+            } => {
+                buffer.write_qname(domain)?;
+                buffer.write_u16(QueryType::AAAA.to_number())?;
+                buffer.write_u16(1)?;
+                buffer.write_u32(ttl)?;
+                buffer.write_u16(16)?;
+
+                for octet in &address.segments() {
+                    buffer.write_u16(*octet)?;
+                }
             }
             DnsRecord::UNKNOWN { .. } => {
                 println!("Skipping record: {:?}", self);

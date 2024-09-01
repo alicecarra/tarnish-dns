@@ -7,8 +7,8 @@ use tarnish_dns::protocol::QueryType;
 use tarnish_dns::DnsError;
 
 fn main() -> tarnish_dns::Result<()> {
-    let qname = "google.com";
-    let qtype = QueryType::A;
+    let qname = "www.github.com";
+    let qtype = QueryType::MX;
     let server = ("8.8.8.8", 53);
 
     let socket = UdpSocket::bind(("0.0.0.0", 5454))
